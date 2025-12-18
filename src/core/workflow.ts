@@ -108,7 +108,7 @@ export function defineWorkflow<Input, State>(
     build(workflowBuilder);
 
     // Turn conditionalEdges into LangGraph conditional edges
-    finalizeConditionalEdges(builder, conditionalEdges);
+    finalizeConditionalEdges(builder as StateGraph<State, State, Partial<State>, string>, conditionalEdges);
 
     // Compile into a runnable
     const app = builder.compile( {checkpointer: new MemorySaver()},);
@@ -144,11 +144,13 @@ export function defineWorkflow<Input, State>(
     };
 }
 
+
+
 /**
  * Convert our collected ConditionalEdge<State>[] into graph.addConditionalEdges calls.
  */
 function finalizeConditionalEdges<State>(
-    graph: any, // StateGraph<any>
+    graph: StateGraph<State, State, Partial<State>, string>, // StateGraph<any>
     conditionalEdges: ConditionalEdge<State>[]
 ): void {
     if (conditionalEdges.length === 0) return;

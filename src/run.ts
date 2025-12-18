@@ -2,6 +2,7 @@
 import "./tracing/instrumentation"
 import { weatherUmbrellaWorkflow } from "./workflows/weatherWorkflow";
 import {time} from "zod/v4/mini/iso";
+import {langfuseSpanProcessor} from "./tracing/instrumentation";
 
 async function main() {
     console.log("🌤️  Starting Weather Umbrella Workflow...\n");
@@ -27,7 +28,8 @@ async function main() {
         console.log(`Location: ${result.location}`);
         console.log(`Weather: ${result.weatherText || "N/A"}`);
         console.log(`Umbrella Shops: ${result.shopsRaw || "N/A"}`);
-        setTimeout(()=>{console.log("done")},10000)
+        await langfuseSpanProcessor.forceFlush();
+        //setTimeout(()=>{console.log("done")},10000)
 
     } catch (error) {
         console.error("\n❌ Error running workflow:");
