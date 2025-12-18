@@ -1,11 +1,24 @@
 
 import "./tracing/instrumentation"
-import { weatherUmbrellaWorkflow } from "./workflows/weatherWorkflow";
-import {time} from "zod/v4/mini/iso";
-import {langfuseSpanProcessor} from "./tracing/instrumentation";
+// Run workflows from the registry
+import "dotenv/config";
+import "./tracing/instrumentation";
+// Import all workflows to register them automatically
+import "./workflows";
+import { workflowRegistry } from "./core/workflowRegistry";
 
 async function main() {
-    console.log("🌤️  Starting Weather Umbrella Workflow...\n");
+    // Load workflow from registry by ID
+    const workflowId = "weather-umbrella";
+    const workflow = workflowRegistry.get(workflowId);
+
+    if (!workflow) {
+        console.error(`❌ Workflow '${workflowId}' not found in registry`);
+        console.log("\n📋 Available workflows:", workflowRegistry.listWorkflows().join(", "));
+        process.exit(1);
+    }
+
+    console.log(`🌤️  Starting workflow: ${workflowId}\n`);
 
     try {
         // Test input: Check weather in San Francisco
@@ -17,7 +30,7 @@ async function main() {
         console.log("\n⏳ Running workflow...\n");
 
         // Run the workflow
-        const result = await weatherUmbrellaWorkflow.run(input);
+        const result = await workflow.run(input);
 
         // Log the result
         console.log("✅ Workflow completed successfully!\n");
@@ -25,11 +38,12 @@ async function main() {
         console.log(JSON.stringify(result, null, 2));
 
         console.log("\n--- Details ---");
-        console.log(`Location: ${result.location}`);
-        console.log(`Weather: ${result.weatherText || "N/A"}`);
-        console.log(`Umbrella Shops: ${result.shopsRaw || "N/A"}`);
-        await langfuseSpanProcessor.forceFlush();
-        //setTimeout(()=>{console.log("done")},10000)
+        console.log(`Location: ${(result as any).location || "N/A"}`);
+        console.log(`Weather: ${(result as any).weatherText || "N/A"}`);
+        console.log(`Umbrella Shops: ${(result as any).shopsRaw || "N/A"}`);
+
+        // Optional: small delay to allow async handlers to finalize (non-blocking)
+        await new Promise((r) => setTimeout(r, 500));
 
     } catch (error) {
         console.error("\n❌ Error running workflow:");

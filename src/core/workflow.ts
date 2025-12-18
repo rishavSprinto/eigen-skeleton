@@ -3,38 +3,34 @@
 import type { ZodObject, ZodRawShape } from "zod";
 import { StateGraph, START, END, MemorySaver } from "@langchain/langgraph";
 
-import {
-    registerLlmNode,
-    type LlmNodeConfig,
-} from "../tools/llmNode";
-import {
-    addEdgeToGraph,
-    type EdgeOptions,
-    type ConditionalEdge,
-} from "../tools/edges";
+import { toolRegistry } from "../tools";
+import type { LlmNodeConfig } from "../tools";
+import { addEdgeToGraph, finalizeConditionalEdges } from "./helpers";
+import type { EdgeOptions, ConditionalEdge } from "./helpers";
 import { CallbackHandler } from "@langfuse/langchain";
+import { workflowRegistry } from "./workflowRegistry";
 
 export type NodeHandle = { id: string };
 
-export interface WorkflowBuilder<State> {
+export interface WorkflowBuilder<StateType> {
     start: NodeHandle;
     end: NodeHandle;
 
     addLlmNode(
         id: string,
-        config: LlmNodeConfig<State>
+        config: LlmNodeConfig<StateType>
     ): NodeHandle;
 
     addEdge(
         from: NodeHandle,
         to: NodeHandle,
-        options?: EdgeOptions<State>
+        options?: EdgeOptions<StateType>
     ): void;
 }
 
-export type CompiledWorkflow<Input, State> = {
+export type CompiledWorkflow = {
     id: string;
-    run(input: Input): Promise<State>;
+    run(input: Record<string, unknown>): Promise<Record<string, unknown>>;
 };
 
 /**
@@ -64,15 +60,15 @@ export type CompiledWorkflow<Input, State> = {
  * });
  * ```
  */
-export function defineWorkflow<Input, State>(
+export function defineWorkflow<StateType>(
     meta: {
         id: string;
         inputSchema: ZodObject<ZodRawShape>; // Must be z.object() schema for input validation
         stateSchema: ZodObject<ZodRawShape>; // Must be z.object() schema for state definition
         metadata?: Record<string, string | number | boolean>; // Workflow-level metadata for Langfuse
     },
-    build: (wf: WorkflowBuilder<State>) => void
-): CompiledWorkflow<Input, State> {
+    build: (wf: WorkflowBuilder<StateType>) => void
+): CompiledWorkflow {
     // Use Zod schema to configure StateGraph
     // Let TypeScript infer the exact type from the constructor
     const builder = new StateGraph(meta.stateSchema);
@@ -82,20 +78,24 @@ export function defineWorkflow<Input, State>(
     const startHandle: NodeHandle = { id: START };
     const endHandle: NodeHandle = { id: END };
 
-    const conditionalEdges: ConditionalEdge<State>[] = [];
+    const conditionalEdges: ConditionalEdge<StateType>[] = [];
 
-    const workflowBuilder: WorkflowBuilder<State> = {
+    const workflowBuilder: WorkflowBuilder<StateType> = {
         start: startHandle,
         end: endHandle,
 
         addLlmNode(id, config) {
-            registerLlmNode<State>(builder, id, config);
+            const registerLlmNode = toolRegistry.get('llmNode');
+            if (!registerLlmNode) {
+                throw new Error("LLM node tool not found in registry");
+            }
+            registerLlmNode(builder, id, config);
             return { id };
         },
 
         addEdge(from, to, options) {
-            addEdgeToGraph<State>(
-                builder as StateGraph<State, State, Partial<State>, string>,
+            addEdgeToGraph(
+                builder,
                 from.id,
                 to.id,
                 options,
@@ -108,15 +108,15 @@ export function defineWorkflow<Input, State>(
     build(workflowBuilder);
 
     // Turn conditionalEdges into LangGraph conditional edges
-    finalizeConditionalEdges(builder as StateGraph<State, State, Partial<State>, string>, conditionalEdges);
+    finalizeConditionalEdges(builder, conditionalEdges);
 
     // Compile into a runnable
     const app = builder.compile( {checkpointer: new MemorySaver()},);
 
-    return {
+    const compiledWorkflow: CompiledWorkflow = {
         id: meta.id,
-        async run(input: Input): Promise<State> {
-            // Validate input
+        async run(input: Record<string, unknown>): Promise<Record<string, unknown>> {
+            // Validate input using the provided Zod schema
             const parsed = meta.inputSchema.parse(input);
 
             // Build tags from workflow metadata
@@ -138,55 +138,14 @@ export function defineWorkflow<Input, State>(
                 callbacks: [langfuseHandler],
             });
 
-            // CallbackHandler flushes automatically
-            return finalState as State;
+            // Return final state (validated by Zod schema at runtime)
+            return finalState as Record<string, unknown>;
         },
     };
+
+    // Auto-register the workflow in the global registry
+    workflowRegistry.register(meta.id, compiledWorkflow);
+
+    return compiledWorkflow;
 }
 
-
-
-/**
- * Convert our collected ConditionalEdge<State>[] into graph.addConditionalEdges calls.
- */
-function finalizeConditionalEdges<State>(
-    graph: StateGraph<State, State, Partial<State>, string>, // StateGraph<any>
-    conditionalEdges: ConditionalEdge<State>[]
-): void {
-    if (conditionalEdges.length === 0) return;
-
-    const grouped = new Map<string, ConditionalEdge<State>[]>();
-
-    for (const edge of conditionalEdges) {
-        const list = grouped.get(edge.from) ?? [];
-        list.push(edge);
-        grouped.set(edge.from, list);
-    }
-
-    for (const [fromId, edges] of grouped.entries()) {
-        const possibleTargets = Array.from(
-            new Set(edges.map((e) => e.to))
-        );
-
-        const routingFn = (state: State): string | string[] => {
-            const matches: string[] = [];
-
-            for (const e of edges) {
-                if (e.when(state)) {
-                    matches.push(e.to);
-                }
-            }
-
-            if (matches.length === 0) {
-                // no branch taken: stop here
-                return [];
-            }
-
-            // If multiple branches match, run them in parallel
-            return matches.length === 1 ? matches[0] : matches;
-        };
-
-        // Third param (possibleTargets) helps Studio render conditionals
-        graph.addConditionalEdges(fromId, routingFn, possibleTargets);
-    }
-}

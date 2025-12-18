@@ -3,15 +3,17 @@
 import { ChatOpenAI } from "@langchain/openai";
 import type { StateGraph } from "@langchain/langgraph"
 import type { Model } from "../modelProvider/openai";
+import { toolRegistry } from "./registry";
+
 
 
 export type LlmOutputFormat = "string" | "json";
 
-export type LlmNodeConfig<State> = {
+export type LlmNodeConfig<StateType> = {
     model: Model;
     outputFormat: LlmOutputFormat;
-    targetKey: keyof State;
-    buildInput: (state: State) => {
+    targetKey: string;
+    buildInput: (state: StateType) => {
         prompt: string;
         systemPrompt?: string;
     };
@@ -25,14 +27,14 @@ export type LlmNodeConfig<State> = {
  *   - calls the model with `prompt`
  *   - writes the result to `targetKey` in State
  */
-export function registerLlmNode<State>(
+export function registerLlmNode<StateType>(
     graph: StateGraph<any>,
     id: string,
-    config: LlmNodeConfig<State>
+    config: LlmNodeConfig<StateType>
 ): void {
     const { model, outputFormat, targetKey, buildInput, } = config;
 
-    graph.addNode(id, async (state: State) => {
+    graph.addNode(id, async (state:StateType) => {
         const { prompt, systemPrompt } = buildInput(state);
 
         if (model.provider !== "openai") {
@@ -43,7 +45,7 @@ export function registerLlmNode<State>(
             model: model.name,
             temperature: model.temperature ?? 0.2,
             maxTokens: model.maxTokens,
-            apiKey: process.env.OPENAI_API_KEY,
+            apiKey: process.env.OPENAI_API_KEY
         });
 
 
@@ -70,6 +72,10 @@ export function registerLlmNode<State>(
         // Return a partial state update (LangGraph merges it)
         return {
             [targetKey]: value,
-        } as Partial<State>;
+        };
     });
 }
+
+// Register the LLM node tool in the registry
+toolRegistry.register('llmNode', registerLlmNode);
+

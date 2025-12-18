@@ -4,19 +4,18 @@ import { defineWorkflow } from "../core/workflow";
 import type { Model } from "../modelProvider/openai";
 
 
-// State & input
+// State & input schemas
 const WeatherInputSchema = z.object({
     location: z.string(),
 });
-type WeatherInput = z.infer<typeof WeatherInputSchema>;
 
 const WeatherStateSchema = z.object({
-
-        location: z.string(),
+    location: z.string(),
     weatherText: z.string().optional(),
     shopsRaw: z.string().optional(),
 });
-type WeatherState = z.infer<typeof WeatherStateSchema>;
+
+type WeatherStateType = z.infer<typeof WeatherStateSchema>;
 
 // Model
 export const GPT4MiniModel: Model = {
@@ -25,14 +24,10 @@ export const GPT4MiniModel: Model = {
     temperature: 0.2,
 };
 
-export const weatherUmbrellaWorkflow = defineWorkflow<
-    WeatherInput,
-    WeatherState
->(
-    {
-        id: "weather-umbrella",
-        inputSchema: WeatherInputSchema,
-        stateSchema: WeatherStateSchema,
+export const weatherUmbrellaWorkflow = defineWorkflow<WeatherStateType>({
+    id: "weather-umbrella",
+    inputSchema: WeatherInputSchema,
+    stateSchema: WeatherStateSchema,
         metadata: {
             workflow: "weather-umbrella",
             version: "1.0",
@@ -45,7 +40,7 @@ export const weatherUmbrellaWorkflow = defineWorkflow<
             model: GPT4MiniModel,
             outputFormat: "string",
             targetKey: "weatherText",
-            buildInput: (state:any) => ({
+            buildInput: (state: WeatherStateType) => ({
                 prompt: `Is it rainy today in ${state.location}? Answer "yes" or "no". if you dont have real time data answer "yes"`,
             }),
         });
@@ -54,8 +49,8 @@ export const weatherUmbrellaWorkflow = defineWorkflow<
             model: GPT4MiniModel,
             outputFormat: "string",
             targetKey: "shopsRaw",
-            buildInput: (state) => ({
-                prompt: `It is raining in ${state.location}. 
+            buildInput: (state: WeatherStateType) => ({
+                prompt: `It is raining in ${state.location}.
 List two umbrella shops nearby, one per line.`,
             }),
         });
@@ -63,12 +58,12 @@ List two umbrella shops nearby, one per line.`,
         wf.addEdge(wf.start, weatherNode);
 
         wf.addEdge(weatherNode, umbrellaNode, {
-            when: (state) =>
+            when: (state: WeatherStateType) =>
                 (state.weatherText ?? "").toLowerCase().includes("yes"),
         });
 
         wf.addEdge(weatherNode, wf.end, {
-            when: (state) =>
+            when: (state: WeatherStateType) =>
                 !(state.weatherText ?? "").toLowerCase().includes("yes"),
         });
 
