@@ -1,8 +1,18 @@
-# Eigen Skeleton - Workflow Framework
+# Eigen Workflow Framework
 
-A lightweight, type-safe framework for building and executing AI-powered workflows using Zod schemas, LangGraph orchestration, and LangChain models.
+A TypeScript-based workflow orchestration system for building complex AI-powered workflows with LLMs, tools, and nested sub-workflows.
 
-## Quick Start
+## ✨ Features
+
+- 🤖 **Agent Support** - Create autonomous agents with custom tools
+- 🔧 **Extensible Tools** - HTTP, Location, and custom tool support
+- 🔄 **Workflow Composition** - Nest workflows within workflows
+- 📊 **Type-Safe** - Full TypeScript + Zod schema validation
+- 🎯 **Generic API** - Single `addNode()` method for all node types
+- 📝 **Observable** - Built-in Langfuse integration for tracing
+- 🚀 **REST API** - HTTP endpoints for workflow execution
+
+## 🚀 Quick Start
 
 ### Installation
 
@@ -10,210 +20,361 @@ A lightweight, type-safe framework for building and executing AI-powered workflo
 npm install
 ```
 
-### Run the Server
+### Environment Setup
+
+```bash
+cp .env.example .env
+# Add your API keys:
+# - OPENAI_API_KEY
+# - LANGFUSE_PUBLIC_KEY
+# - LANGFUSE_SECRET_KEY
+```
+
+### Run Example Workflow
 
 ```bash
 npm run dev
-# Server starts on http://localhost:3000
 ```
 
-### Run a Workflow (CLI)
+### Start API Server
 
 ```bash
-npm run cli
-# Executes workflow from registry
+npm start
 ```
 
-## Architecture
+### Execute via API
 
-```
-src/
-├── app.ts              # Express app configuration (exported for testing)
-├── index.ts            # Server entry point (starts HTTP server)
-├── run.ts              # CLI runner for workflows
-├── core/               # Core framework
-│   ├── workflow.ts     # Workflow DSL and auto-registration
-│   ├── workflowRegistry.ts  # Global workflow registry
-│   └── helpers.ts      # Edge and routing helpers
-├── workflows/          # Workflow definitions
-│   ├── index.ts        # Exports all workflows (single import point)
-│   └── weatherWorkflow.ts  # Example workflow
-└── tools/              # Tools (LLM nodes, etc.)
-    ├── registry.ts     # Tool registry
-    └── llmNode.ts      # LLM node tool
+```bash
+curl -X POST http://localhost:3000/api/workflows/weather-umbrella/execute \
+  -H "Content-Type: application/json" \
+  -d '{"location": "Paris"}'
 ```
 
-## Key Concepts
+## 📖 Documentation
 
-### 1. Define a Workflow
+- **[Complete Documentation](./docs/COMPLETE_DOCUMENTATION.md)** - Full framework guide
+- **[Callable Registry](./docs/CALLABLE_REGISTRY.md)** - Registry system explained
+- **[Workflows as Nodes](./docs/WORKFLOWS_AS_NODES.md)** - Workflow composition
+- **[Generic Node API](./docs/GENERIC_NODE_API.md)** - Node system architecture
+- **[Travel Workflow Example](./docs/TRAVEL_WORKFLOW_EXAMPLE.md)** - Complex example
+
+## 🏗️ Architecture
+
+```
+┌─────────────────────────────────────┐
+│     Eigen Workflow Framework        │
+├─────────────────────────────────────┤
+│  Callables (Tools, Agents, Workflows)
+│       ↓
+│  Registries (Callable, Workflow)
+│       ↓
+│  LangGraph StateGraph
+│       ↓
+│  REST API
+└─────────────────────────────────────┘
+```
+
+### Core Concepts
+
+**Callables** - Everything executable implements the `Callable` interface
+- Tools (HTTP, Location, Custom)
+- Agents (LLM with tools)
+- Workflows (Composable state machines)
+
+**Registries** - Two registries manage the system
+- `callableRegistry` - Node type registration functions
+- `workflowRegistry` - Executable workflow instances
+
+**Workflows** - Composable, type-safe state machines
+- Built with `defineWorkflow()`
+- Can be nested within other workflows
+- Full Zod schema validation
+
+## 💡 Example: Simple Workflow
 
 ```typescript
-// src/workflows/myWorkflow.ts
 import { z } from "zod";
-import { defineWorkflow } from "../core/workflow";
+import { defineWorkflow } from "./core/workflow";
 
-const InputSchema = z.object({
+const WeatherStateSchema = z.object({
     location: z.string(),
+    weatherText: z.string().optional(),
 });
 
-const StateSchema = z.object({
-    input: z.object({ location: z.string() }),
-    result: z.string().optional(),
-});
-
-export const myWorkflow = defineWorkflow<z.infer<typeof StateSchema>>({
-    id: "my-workflow",
-    inputSchema: InputSchema,
-    stateSchema: StateSchema,
-    metadata: { version: "1.0" },
+export const weatherWorkflow = defineWorkflow({
+    id: "weather-check",
+    inputSchema: z.object({ location: z.string() }),
+    stateSchema: WeatherStateSchema,
 }, (wf) => {
-    const node1 = wf.addLlmNode("analyze", {
-        model: { provider: "openai", name: "gpt-4o-mini" },
-        outputFormat: "string",
-        targetKey: "result",
+    const weatherNode = wf.addNode("check", "agent", {
+        name: "Weather Checker",
+        model: GPT4MiniModel,
+        tools: [],
+        targetKey: "weatherText",
         buildInput: (state) => ({
-            prompt: `Analyze: ${state.input.location}`,
+            query: `Is it rainy in ${state.location}?`,
         }),
     });
 
-    wf.addEdge(wf.start, node1);
-    wf.addEdge(node1, wf.end);
+    wf.addEdge(wf.start, weatherNode);
+    wf.addEdge(weatherNode, wf.end);
 });
 ```
 
-### 2. Register Workflow
+## 💡 Example: Nested Workflows
 
 ```typescript
-// src/workflows/index.ts
-export { weatherUmbrellaWorkflow } from "./weatherWorkflow";
-export { myWorkflow } from "./myWorkflow";  // ← Add this line
+// Child workflow
+export const weatherWorkflow = defineWorkflow({
+    id: "weather-umbrella",
+    inputSchema: z.object({ location: z.string() }),
+    stateSchema: WeatherStateSchema,
+}, (wf) => {
+    // ... weather checking logic
+});
+
+// Parent workflow using child
+export const travelWorkflow = defineWorkflow({
+    id: "travel-planning",
+    stateSchema: WeatherStateSchema.extend({
+        userId: z.string(),
+    }),
+}, (wf) => {
+    // Get location
+    const location = wf.addNode("location", "location-tool", {
+        targetKey: "location",
+        buildInput: (state) => ({}),
+    });
+
+    // Use weather workflow as node
+    const weather = wf.addNode("weather", "weather-umbrella", {
+        // No buildInput needed - state already has location!
+    });
+
+    wf.addEdge(wf.start, location);
+    wf.addEdge(location, weather);
+    wf.addEdge(weather, wf.end);
+});
 ```
 
-### 3. It's Automatically Available!
+## 🔧 Creating Custom Tools
 
-```bash
-# Via API
-curl http://localhost:3000/api/workflows
-# Returns: ["weather-umbrella", "my-workflow"]
+```typescript
+// 1. Create the tool
+export function createMyTool(config: MyToolConfig): ToolCallable {
+    const run = async (input: any): Promise<any> => {
+        // Your logic here
+        return { result: "..." };
+    };
 
-curl -X POST http://localhost:3000/api/workflows/my-workflow/execute \
-  -H "Content-Type: application/json" \
-  -d '{"location":"Paris"}'
+    const toLangChainTool = () => {
+        return new DynamicStructuredTool({
+            name: config.name,
+            description: config.description,
+            schema: z.object({ query: z.string() }),
+            func: async (input) => {
+                const result = await run(input);
+                return JSON.stringify(result);
+            },
+        });
+    };
+
+    return { id, name, description, run, toLangChainTool };
+}
+
+// 2. Create node registration
+export function registerMyToolNode(graph: StateGraph, config: any) {
+    const tool = createMyTool(config);
+    graph.addNode(config.id, async (state) => {
+        const result = await tool.run(config.buildInput(state));
+        return { [config.targetKey]: result };
+    });
+}
+
+// 3. Register in callable registry
+callableRegistry.register("my-tool", registerMyToolNode);
+
+// 4. Import in core/index.ts
+import "./tools/myTool";
+
+// 5. Use it!
+wf.addNode("node-1", "my-tool", {
+    targetKey: "result",
+    buildInput: (state) => state.input,
+});
 ```
 
-## API Endpoints
+## 📦 Project Structure
+
+```
+src/
+├── core/
+│   ├── callable.ts           # Callable types
+│   ├── callableRegistry.ts   # Node type registry
+│   ├── workflowRegistry.ts   # Workflow instance registry
+│   ├── workflow.ts           # Workflow builder
+│   ├── helpers.ts            # Edge helpers
+│   ├── index.ts              # Core exports
+│   └── tools/
+│       ├── agentNode.ts      # Agent node type
+│       ├── httpTool.ts       # HTTP tool
+│       ├── locationTool.ts   # Location tool
+│       └── workflowNode.ts   # Workflow node wrapper
+├── workflows/
+│   ├── weatherWorkflow.ts
+│   ├── locationWeatherWorkflow.ts
+│   ├── travelPlanningWorkflow.ts
+│   └── index.ts              # Workflow exports
+├── tracing/
+│   └── langfuse.ts           # Langfuse integration
+├── app.ts                    # Express app
+├── index.ts                  # Server entry point
+└── run.ts                    # CLI runner
+```
+
+## 🔌 API Endpoints
 
 ### List Workflows
-```http
+```bash
 GET /api/workflows
 ```
 
 ### Execute Workflow
-```http
+```bash
 POST /api/workflows/:id/execute
 Content-Type: application/json
 
 {
-  "location": "San Francisco"
+    "location": "Paris",
+    "fields": ["weatherText"]  # Optional: filter output
 }
 ```
-
-### Execute Workflow with Field Selection
-```http
-POST /api/workflows/:id/execute
-Content-Type: application/json
-
-{
-  "location": "San Francisco",
-  "fields": ["weatherText", "shopsRaw"]
-}
-```
-
-The `fields` parameter is optional and allows you to specify which fields from the result should be returned. If omitted, all fields are returned.
 
 ### Health Check
-```http
+```bash
 GET /health
 ```
 
-## Features
+## 🧪 Available Workflows
 
-✅ **Auto-Registration** - Workflows register themselves when defined
-✅ **Type-Safe** - Zod schemas provide runtime validation
-✅ **Conditional Routing** - Support for conditional and parallel edges
-✅ **LLM Integration** - Built-in support for OpenAI models
-✅ **Observability** - Integrated Langfuse tracing
-✅ **HTTP API** - RESTful API for workflow execution
-✅ **Testable** - App/server separation for easy testing
+- `weather-umbrella` - Check weather and find umbrella shops
+- `location-weather` - Get location → Check weather
+- `travel-planning` - Complex travel planning with multiple sub-workflows
 
-## Environment Variables
+## 📊 Node Types
 
+All nodes use the generic `addNode(id, type, config)` API:
+
+| Type | Purpose | Example |
+|------|---------|---------|
+| `agent` | LLM with tools | Research, analysis, reasoning |
+| `http-tool` | HTTP requests | API calls, data fetching |
+| `location-tool` | Location data | Get user location |
+| `workflow` | Sub-workflow wrapper | Generic workflow node |
+| `<workflow-id>` | Specific workflow | Direct workflow usage |
+
+## 🎯 Design Principles
+
+1. **Everything is a Callable** - Uniform interface for tools, agents, workflows
+2. **Composition > Configuration** - Build complex from simple
+3. **Type Safety** - Zod schemas everywhere
+4. **DRY (Don't Repeat Yourself)** - Reuse schemas and workflows
+5. **State Matching** - Parent state should match child requirements
+
+## 🔑 Key Concepts
+
+### Callables
+Base interface for all executable components (tools, agents, workflows)
+
+### Registries
+- **callableRegistry** - Maps node types to registration functions
+- **workflowRegistry** - Stores executable workflow instances
+
+### State Management
+- State flows through nodes
+- Each node contributes updates
+- Parent state should match child input requirements
+
+### Workflow Composition
+- Workflows can be used as nodes in other workflows
+- Export and reuse state schemas
+- No buildInput needed when states match
+
+## 🛠️ Development
+
+### Run in Development
 ```bash
-# .env
-OPENAI_API_KEY=sk-***
-LANGFUSE_PUBLIC_KEY=pk-lf-***
-LANGFUSE_SECRET_KEY=sk-lf-***
-LANGFUSE_HOST=https://cloud.langfuse.com
-PORT=3000
+npm run dev
 ```
 
-## Commands
-
-| Command | Description |
-|---------|-------------|
-| `npm run dev` | Start server with hot reload |
-| `npm run cli` | Run workflow via CLI |
-| `npm run build` | Build for production |
-| `npm start` | Start production server |
-
-## Documentation
-
-- [Workflow Registration](./docs/WORKFLOW_REGISTRATION.md) - How workflows are registered
-- [Server Architecture](./docs/SERVER_ARCHITECTURE.md) - App/server separation
-- [Architecture One-Pager](./docs/ARCHITECTURE_ONE_PAGER.md) - Complete architecture overview
-- [Workflow Registry](./docs/WORKFLOW_REGISTRY.md) - Registry API and patterns
-
-## Example Workflow
-
-The framework includes a weather/umbrella workflow example:
-
-```typescript
-// Check if it's raining, suggest umbrella shops if yes
-const result = await weatherUmbrellaWorkflow.run({
-    location: "San Francisco"
-});
-
-// Returns:
-// {
-//   input: { location: "San Francisco" },
-//   weatherText: "yes",
-//   shopsRaw: "Shop A\nShop B"
-// }
+### Build
+```bash
+npm run build
 ```
 
-## Adding New Workflows
-
-1. **Create** workflow file in `src/workflows/`
-2. **Export** from `src/workflows/index.ts`
-3. **Done!** Available via API and registry
-
-See [Workflow Registration docs](./docs/WORKFLOW_REGISTRATION.md) for details.
-
-## Testing (Future)
-
-```typescript
-import { app } from "./app";
-import request from "supertest";
-
-test("Execute workflow", async () => {
-    const res = await request(app)
-        .post("/api/workflows/weather-umbrella/execute")
-        .send({ location: "NYC" });
-    expect(res.status).toBe(200);
-});
+### Type Check
+```bash
+npm run type-check
 ```
 
-## License
+### Run Tests
+```bash
+npm test
+```
+
+## 🤝 Contributing
+
+1. Create new tool in `src/core/tools/`
+2. Register in `callableRegistry`
+3. Import in `src/core/index.ts`
+4. Add tests and documentation
+5. Submit PR
+
+## 📝 Examples
+
+Check the `/docs` directory for detailed examples:
+- Simple workflows
+- Nested workflows
+- Agent with tools
+- Parallel execution
+- Complex composition
+
+## 🐛 Troubleshooting
+
+### Node type not found
+Ensure the node type is imported in `src/core/index.ts`
+
+### Workflow not found
+Import workflow in `src/workflows/index.ts`
+
+### State doesn't match
+Parent state must include all child input fields
+
+### Type errors
+Check Zod schema definitions and state types
+
+## 📚 Learn More
+
+- [Complete Documentation](./docs/COMPLETE_DOCUMENTATION.md)
+- [LangGraph Documentation](https://langchain-ai.github.io/langgraph/)
+- [Zod Documentation](https://zod.dev/)
+- [Langfuse Documentation](https://langfuse.com/docs)
+
+## 📄 License
 
 MIT
+
+## 🙏 Acknowledgments
+
+Built with:
+- [LangGraph](https://github.com/langchain-ai/langgraph) - Workflow orchestration
+- [LangChain](https://github.com/langchain-ai/langchainjs) - LLM framework
+- [Zod](https://github.com/colinhacks/zod) - Schema validation
+- [Langfuse](https://langfuse.com/) - Observability
+
+---
+
+**Happy Building! 🚀**
+
+For questions or support, check the [documentation](./docs/COMPLETE_DOCUMENTATION.md) or file an issue.
 

@@ -9,7 +9,7 @@ const WeatherInputSchema = z.object({
     location: z.string(),
 });
 
-const WeatherStateSchema = z.object({
+export const WeatherStateSchema = z.object({
     location: z.string(),
     weatherText: z.string().optional(),
     shopsRaw: z.string().optional(),
@@ -36,22 +36,25 @@ export const weatherUmbrellaWorkflow = defineWorkflow<WeatherStateType>({
         },
     },
     (wf) => {
-        const weatherNode = wf.addLlmNode("weatherCheck", {
+        const weatherNode = wf.addNode("weatherCheck", "agent", {
+            name: "Weather Check",
+            description: "Check if it's rainy",
             model: GPT4MiniModel,
-            outputFormat: "string",
+            tools: ['test-tool'], // No tools - just LLM
             targetKey: "weatherText",
             buildInput: (state: WeatherStateType) => ({
-                prompt: `Is it rainy today in ${state.location}? Answer "yes" or "no". if you dont have real time data answer "yes"`,
+                query: `Is it rainy today in ${state.location}? Answer "yes" or "no". if you dont have real time data answer "yes"`,
             }),
         });
 
-        const umbrellaNode = wf.addLlmNode("umbrellaShops", {
+        const umbrellaNode = wf.addNode("umbrellaShops", "agent", {
+            name: "Umbrella Shops",
+            description: "Find umbrella shops",
             model: GPT4MiniModel,
-            outputFormat: "string",
+            tools: [], // No tools - just LLM
             targetKey: "shopsRaw",
             buildInput: (state: WeatherStateType) => ({
-                prompt: `It is raining in ${state.location}.
-List two umbrella shops nearby, one per line.`,
+                query: `It is raining in ${state.location}. List two umbrella shops nearby, one per line.`,
             }),
         });
 

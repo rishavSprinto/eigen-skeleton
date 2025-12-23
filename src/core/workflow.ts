@@ -3,22 +3,29 @@
 import type { ZodObject, ZodRawShape } from "zod";
 import { StateGraph, START, END, MemorySaver } from "@langchain/langgraph";
 
-import { toolRegistry } from "../tools";
-import type { LlmNodeConfig } from "../tools";
+import { callableRegistry} from "./index";
+import {type CallableRegistrationFunction } from './callableRegistry';
+import { workflowRegistry } from "./workflowRegistry";
 import { addEdgeToGraph, finalizeConditionalEdges } from "./helpers";
 import type { EdgeOptions, ConditionalEdge } from "./helpers";
 import { CallbackHandler } from "@langfuse/langchain";
-import { workflowRegistry } from "./workflowRegistry";
+import type { WorkflowCallable } from "./callable";
 
 export type NodeHandle = { id: string };
+
+
 
 export interface WorkflowBuilder<StateType> {
     start: NodeHandle;
     end: NodeHandle;
 
-    addLlmNode(
+    /**
+     * Generic method to add any type of node
+     */
+    addNode(
         id: string,
-        config: LlmNodeConfig<StateType>
+        nodeType: string,
+        config: any
     ): NodeHandle;
 
     addEdge(
@@ -28,10 +35,45 @@ export interface WorkflowBuilder<StateType> {
     ): void;
 }
 
-export type CompiledWorkflow = {
-    id: string;
+export type CompiledWorkflow = WorkflowCallable & {
     run(input: Record<string, unknown>): Promise<Record<string, unknown>>;
 };
+
+/**
+ * Generic workflow registration function
+ * Creates a registration function that wraps a workflow for use as a node
+ */
+function createWorkflowRegistration(workflow: CompiledWorkflow): CallableRegistrationFunction {
+    return (graph: StateGraph<any>, config: any) => {
+        graph.addNode(
+            config.id,
+            async (state: any) => {
+                // If buildInput is provided, use it to map state to workflow input
+                // Otherwise, pass the state directly (parent state matches child input)
+                const input = config.buildInput ? config.buildInput(state) : state;
+                const result = await workflow.run(input);
+
+                // If targetKey is provided, wrap result in that key
+                // Otherwise, merge result directly into state
+                if (config.targetKey) {
+                    return {
+                        [config.targetKey]: result,
+                    };
+                } else {
+                    return result;
+                }
+            },
+            {
+                metadata: {
+                    name: config.id,
+                    description: `Workflow: ${workflow.id}`,
+                    type: "workflow",
+                    workflowId: workflow.id,
+                },
+            }
+        );
+    };
+}
 
 /**
  * Main entrypoint: define a workflow with your DSL.
@@ -84,12 +126,17 @@ export function defineWorkflow<StateType>(
         start: startHandle,
         end: endHandle,
 
-        addLlmNode(id, config) {
-            const registerLlmNode = toolRegistry.get('llmNode');
-            if (!registerLlmNode) {
-                throw new Error("LLM node tool not found in registry");
+        addNode(id, nodeType, config) {
+            // Get the registration function for this callable type
+            const registerFn = callableRegistry.get(nodeType);
+            if (!registerFn) {
+                throw new Error(
+                    `Callable type '${nodeType}' not found. Available: ${callableRegistry.listCallables().join(", ")}`
+                );
             }
-            registerLlmNode(builder, id, config);
+
+            // Call the registration function with the graph and config
+            registerFn(builder, { ...config, id });
             return { id };
         },
 
@@ -115,6 +162,12 @@ export function defineWorkflow<StateType>(
 
     const compiledWorkflow: CompiledWorkflow = {
         id: meta.id,
+        name: meta.id,
+        description: meta.metadata?.description as string || `Workflow: ${meta.id}`,
+        metadata: meta.metadata,
+        inputSchema: meta.inputSchema,
+        stateSchema: meta.stateSchema,
+
         async run(input: Record<string, unknown>): Promise<Record<string, unknown>> {
             // Validate input using the provided Zod schema
             const parsed = meta.inputSchema.parse(input);
@@ -143,8 +196,11 @@ export function defineWorkflow<StateType>(
         },
     };
 
-    // Auto-register the workflow in the global registry
+    // Register workflow instance in workflow registry (for API execution)
     workflowRegistry.register(meta.id, compiledWorkflow);
+
+    // Register in callable registry using generic registration function
+    callableRegistry.register(meta.id, createWorkflowRegistration(compiledWorkflow));
 
     return compiledWorkflow;
 }

@@ -9,7 +9,7 @@ import { workflowRegistry } from "./core/workflowRegistry";
 
 async function main() {
     // Load workflow from registry by ID
-    const workflowId = "weather-umbrella";
+    const workflowId = "location-weather";
     const workflow = workflowRegistry.get(workflowId);
 
     if (!workflow) {
